@@ -63,7 +63,7 @@ export async function POST(req: NextRequest) {
     const packages = orders.map((o) => ({ orderSn: o.platformOrderId, packageNumber: o.platformPackageId }));
     const pdfBuffer = await downloadShippingDocument(shopIds[0]!, packages, printedByUserId);
 
-    return new NextResponse(pdfBuffer, {
+    return new NextResponse(new Uint8Array(pdfBuffer), {
       status: 200,
       headers: {
         "Content-Type": "application/pdf",

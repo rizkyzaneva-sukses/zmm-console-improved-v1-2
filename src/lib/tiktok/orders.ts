@@ -1,7 +1,7 @@
 import { db } from "@/lib/db";
 import { tiktokGet } from "./client";
 import { mapTikTokStatusToInternal } from "@/lib/shopee/status-mapper";
-import { Platform } from "@prisma/client";
+import { Platform, Prisma } from "@prisma/client";
 
 // ─────────────────────────────────────────────────────────────
 // TikTok Shop Orders Service — Phase A
@@ -159,7 +159,7 @@ async function upsertTikTokOrder(
     shippingCarrier: order.shipping_provider ?? null,
     trackingNumber: order.tracking_number ?? null,
     lastMarketplaceSyncAt: new Date(),
-    marketplacePayload: order as unknown as Record<string, unknown>,
+    marketplacePayload: order as unknown as Prisma.InputJsonValue,
   };
 
   if (existing) {
@@ -190,7 +190,7 @@ async function upsertTikTokItems(
       productImageUrl: item.product_image ?? null,
       quantity: item.quantity ?? 1,
       price: Number(item.sale_price ?? 0),
-      rawItemPayload: item as unknown as Record<string, unknown>,
+      rawItemPayload: item as unknown as Prisma.InputJsonValue,
     })),
   });
 }

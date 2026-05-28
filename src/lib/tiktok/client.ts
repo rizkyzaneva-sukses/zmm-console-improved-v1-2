@@ -2,7 +2,7 @@ import crypto from "crypto";
 import axios from "axios";
 import { db } from "@/lib/db";
 import { safeDecrypt } from "@/lib/encryption";
-import { ApiLogStatus } from "@prisma/client";
+import { ApiLogStatus, Prisma } from "@prisma/client";
 
 // ─────────────────────────────────────────────────────────────
 // TikTok Shop API Client
@@ -121,8 +121,8 @@ export async function tiktokGet<T = unknown>(
         platform: "TIKTOK",
         endpoint: path,
         method: "GET",
-        requestPayload: queryParams,
-        responsePayload: responseData as Record<string, unknown>,
+        requestPayload: queryParams as Prisma.InputJsonValue,
+        responsePayload: (responseData ?? null) as Prisma.InputJsonValue,
         status: logStatus,
         errorMessage,
         durationMs: Date.now() - startTime,

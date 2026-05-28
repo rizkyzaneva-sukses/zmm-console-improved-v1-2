@@ -1,7 +1,7 @@
 import { db } from "@/lib/db";
 import { shopeeGet, getShopCredentials } from "./client";
 import { mapShopeeStatusToInternal } from "./status-mapper";
-import { Platform } from "@prisma/client";
+import { Platform, Prisma } from "@prisma/client";
 
 // ─────────────────────────────────────────────────────────────
 // Shopee Orders Service
@@ -192,7 +192,7 @@ async function upsertShopeeOrder(
       shippingCarrier: order.shipping_carrier ?? null,
       trackingNumber: packageInfo?.tracking_number ?? null,
       lastMarketplaceSyncAt: new Date(),
-      marketplacePayload: order as unknown as Record<string, unknown>,
+      marketplacePayload: order as unknown as Prisma.InputJsonValue,
     },
     update: {
       platformPackageId: packageInfo?.package_number ?? null,
@@ -209,7 +209,7 @@ async function upsertShopeeOrder(
       shippingCarrier: order.shipping_carrier ?? null,
       trackingNumber: packageInfo?.tracking_number ?? null,
       lastMarketplaceSyncAt: new Date(),
-      marketplacePayload: order as unknown as Record<string, unknown>,
+      marketplacePayload: order as unknown as Prisma.InputJsonValue,
     },
   });
 
@@ -232,13 +232,13 @@ async function upsertShopeeOrder(
         quantity: item.model_quantity_purchased,
         price: Number(item.model_discounted_price ?? item.model_original_price ?? 0),
         productImageUrl: item.image_info?.image_url ?? null,
-        rawItemPayload: item as unknown as Record<string, unknown>,
+        rawItemPayload: item as unknown as Prisma.InputJsonValue,
       },
       update: {
         itemName: item.item_name,
         quantity: item.model_quantity_purchased,
         price: Number(item.model_discounted_price ?? item.model_original_price ?? 0),
-        rawItemPayload: item as unknown as Record<string, unknown>,
+        rawItemPayload: item as unknown as Prisma.InputJsonValue,
       },
     });
   }

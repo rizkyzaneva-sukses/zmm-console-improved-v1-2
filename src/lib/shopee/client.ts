@@ -2,7 +2,7 @@ import crypto from "crypto";
 import axios, { AxiosError, AxiosInstance } from "axios";
 import { db } from "@/lib/db";
 import { decrypt, safeDecrypt, encrypt } from "@/lib/encryption";
-import { ApiLogStatus } from "@prisma/client";
+import { ApiLogStatus, Prisma } from "@prisma/client";
 
 // ─────────────────────────────────────────────────────────────
 // Shopee API Client
@@ -106,8 +106,8 @@ async function logShopeeApi(args: {
         platform: "SHOPEE",
         endpoint: args.endpoint,
         method: args.method,
-        requestPayload: sanitizePayload(args.requestPayload),
-        responsePayload: args.responsePayload as Record<string, unknown>,
+        requestPayload: sanitizePayload(args.requestPayload) as Prisma.InputJsonValue,
+        responsePayload: (args.responsePayload ?? null) as Prisma.InputJsonValue,
         status: args.status,
         httpStatus: args.httpStatus ?? null,
         errorMessage: args.errorMessage ?? null,

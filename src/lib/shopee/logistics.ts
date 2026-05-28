@@ -1,5 +1,6 @@
 import { db } from "@/lib/db";
 import { shopeeGet, shopeePost, getShopCredentials } from "./client";
+import { Prisma } from "@prisma/client";
 
 // ─────────────────────────────────────────────────────────────
 // Shopee Logistics Service
@@ -193,7 +194,7 @@ export async function shipOrder(shopDbId: number, payload: ShipOrderPayload) {
         pickupTimeId: payload.pickupTimeId ?? null,
         pickupDate: payload.pickupDate ?? null,
         pickupTimeText: payload.pickupTimeText ?? null,
-        shopeeResponse: result as Record<string, unknown>,
+        shopeeResponse: result as Prisma.InputJsonValue,
       },
     });
 

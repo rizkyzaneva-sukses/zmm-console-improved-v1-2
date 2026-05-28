@@ -1,5 +1,6 @@
 import { db } from "@/lib/db";
 import { shopeePost, shopeeBinaryPost, getShopCredentials } from "./client";
+import { Prisma } from "@prisma/client";
 
 // ─────────────────────────────────────────────────────────────
 // Shopee Shipping Document Service
@@ -50,7 +51,7 @@ export async function createShippingDocument(shopDbId: number, packagesInput: st
           platformOrderId: pkg.orderSn,
           platformPackageId: pkg.packageNumber ?? null,
           documentStatus: "PROCESSING",
-          shopeeResponse: result as Record<string, unknown>,
+          shopeeResponse: result as Prisma.InputJsonValue,
         },
       });
       await db.marketplaceOrder.update({
