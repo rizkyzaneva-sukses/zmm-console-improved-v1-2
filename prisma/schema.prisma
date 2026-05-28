@@ -1,0 +1,410 @@
+// ─────────────────────────────────────────────────────────────────────────────
+// ZMM Console — Prisma Schema
+// Marketplace Order Manager: Shopee + TikTok Shop
+// Versi: 1.1 | Sesuai PRD v1.1
+// ─────────────────────────────────────────────────────────────────────────────
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// ENUMS
+// ─────────────────────────────────────────────────────────────────────────────
+
+enum Platform {
+  SHOPEE
+  TIKTOK
+}
+
+enum UserRole {
+  OWNER         // Semua akses
+  ADMIN_ORDER   // Sync, proses pengiriman, cetak label
+  PACKING_TEAM  // Lihat order diproses + cetak label saja
+}
+
+enum AuthStatus {
+  CONNECTED
+  DISCONNECTED
+  EXPIRED
+}
+
+// Status UI (mapping dari raw marketplace status)
+enum OrderStatus {
+  BELUM_BAYAR
+  PERLU_DIKIRIM
+  DIKIRIM
+  SELESAI
+  DIBATALKAN
+  RETUR
+  UNKNOWN
+}
+
+// Status internal alur proses aplikasi
+enum InternalStatus {
+  BELUM_DIPROSES
+  MENUNGGU_PARAMETER_KIRIM
+  SIAP_DIPROSES
+  PENGIRIMAN_DIPROSES
+  MENUNGGU_RESI
+  RESI_TERSEDIA
+  LABEL_SIAP_DICETAK
+  LABEL_SUDAH_DICETAK
+  GAGAL_PROSES
+}
+
+enum PrintStatus {
+  BELUM_DICETAK
+  SEDANG_DIPROSES
+  SUDAH_DICETAK
+  GAGAL_CETAK
+}
+
+enum ShippingDocStatus {
+  NOT_CREATED
+  PROCESSING
+  READY
+  FAILED
+  DOWNLOADED
+}
+
+enum ApiLogStatus {
+  SUCCESS
+  FAILED
+}
+
+enum PrintType {
+  SHOPEE_OFFICIAL_LABEL
+  TIKTOK_OFFICIAL_LABEL
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// USERS
+// Role sederhana: Owner, Admin Order, Packing Team
+// ─────────────────────────────────────────────────────────────────────────────
+
+model User {
+  id           Int       @id @default(autoincrement())
+  name         String
+  email        String    @unique
+  passwordHash String    @map("password_hash")
+  role         UserRole  @default(ADMIN_ORDER)
+  isActive     Boolean   @default(true) @map("is_active")
+  createdAt    DateTime  @default(now()) @map("created_at")
+  updatedAt    DateTime  @updatedAt @map("updated_at")
+
+  // Relations
+  printLogs    PrintLog[]
+  shipments    Shipment[]
+
+  @@map("users")
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SHOPS
+// Menyimpan koneksi toko Shopee dan TikTok
+// Token WAJIB terenkripsi — jangan pernah simpan plain text
+// ─────────────────────────────────────────────────────────────────────────────
+
+model Shop {
+  id Int @id @default(autoincrement())
+
+  // Identitas toko
+  platform    Platform
+  shopName    String  @map("shop_name")
+  description String? 
+
+  // Platform-specific shop ID
+  // Shopee: shop_id (integer string)
+  // TikTok: shop_id dari TikTok Open API
+  platformShopId String @map("platform_shop_id")
+
+  // TikTok-specific
+  shopCipher String? @map("shop_cipher") // diperlukan untuk beberapa TikTok API call
+
+  // Auth & Token (semua terenkripsi dengan ENCRYPTION_KEY di env)
+  authStatus             AuthStatus @default(DISCONNECTED) @map("auth_status")
+  accessTokenEncrypted   String?    @map("access_token_encrypted")
+  refreshTokenEncrypted  String?    @map("refresh_token_encrypted")
+  tokenExpiredAt         DateTime?  @map("token_expired_at")
+
+  // Sync tracking
+  lastSyncAt DateTime? @map("last_sync_at")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  // Relations
+  orders MarketplaceOrder[]
+
+  @@unique([platform, platformShopId])
+  @@map("shops")
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// MARKETPLACE ORDERS
+// Cache lokal dari Shopee API dan TikTok Shop API
+// Shopee adalah sumber data utama — field ini hanya snapshot
+// ─────────────────────────────────────────────────────────────────────────────
+
+model MarketplaceOrder {
+  id Int @id @default(autoincrement())
+
+  // Platform & toko
+  platform Platform
+  shopId   Int      @map("shop_id")
+  shop     Shop     @relation(fields: [shopId], references: [id])
+
+  // Nomor order
+  // Shopee: order_sn
+  // TikTok: order_id
+  platformOrderId String  @map("platform_order_id")
+  platformPackageId String? @map("platform_package_id") // Shopee: package_number
+
+  // Nomor tampil di UI
+  noPesanan String @map("no_pesanan")
+
+  // Status
+  // rawMarketplaceStatus = status asli dari API (READY_TO_SHIP, AWAITING_SHIPMENT, dll)
+  // status               = mapping ke enum UI
+  // internalStatus       = status alur internal aplikasi
+  rawMarketplaceStatus String         @map("raw_marketplace_status")
+  status               OrderStatus    @default(BELUM_BAYAR)
+  internalStatus       InternalStatus @default(BELUM_DIPROSES) @map("internal_status")
+
+  // Buyer & Penerima
+  buyerUsername    String? @map("buyer_username")
+  recipientName    String? @map("recipient_name")
+  recipientPhone   String? @map("recipient_phone")   // Shopee: masked by default
+  recipientAddress String? @map("recipient_address") @db.Text
+
+  // Pembayaran
+  totalAmount   Decimal @map("total_amount") @db.Decimal(15, 2)
+  currency      String  @default("IDR")
+  paymentMethod String? @map("payment_method")
+
+  // Logistik
+  shippingCarrier     String? @map("shipping_carrier")      // nama ekspedisi
+  logisticsChannelId  String? @map("logistics_channel_id")  // ID channel Shopee/TikTok
+  trackingNumber      String? @map("tracking_number")       // resi resmi — hanya dari API
+
+  // Dokumen pengiriman
+  shippingDocStatus ShippingDocStatus @default(NOT_CREATED) @map("shipping_doc_status")
+
+  // Status cetak
+  printStatus PrintStatus @default(BELUM_DICETAK) @map("print_status")
+  printedAt   DateTime?   @map("printed_at")
+
+  // Sync tracking
+  lastMarketplaceSyncAt DateTime? @map("last_marketplace_sync_at")
+
+  // Raw payload dari API — untuk audit dan debugging
+  // JANGAN tampilkan ini ke frontend
+  marketplacePayload Json? @map("marketplace_payload")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  // Relations
+  items             OrderItem[]
+  shipments         Shipment[]
+  shippingDocuments ShippingDocument[]
+  printLogs         PrintLog[]
+
+  @@unique([platform, platformOrderId])
+  @@index([platform, status])
+  @@index([platform, shopId, status])
+  @@index([trackingNumber])
+  @@index([printStatus])
+  @@index([createdAt])
+  @@map("marketplace_orders")
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// ORDER ITEMS
+// Item produk dalam satu order
+// ─────────────────────────────────────────────────────────────────────────────
+
+model OrderItem {
+  id      Int              @id @default(autoincrement())
+  orderId Int              @map("order_id")
+  order   MarketplaceOrder @relation(fields: [orderId], references: [id], onDelete: Cascade)
+
+  // Platform item ID
+  platformItemId String? @map("platform_item_id") // Shopee: item_id / TikTok: product_id
+  platformSkuId  String? @map("platform_sku_id")  // Shopee: model_id / TikTok: sku_id
+
+  // Data produk
+  itemName String  @map("item_name")
+  itemSku  String? @map("item_sku")   // SKU induk produk
+  sellerSku String? @map("seller_sku") // SKU seller
+
+  // Variasi / model
+  modelName String? @map("model_name")
+  skuName   String? @map("sku_name")   // TikTok: sku_name
+
+  // Media
+  productImageUrl String? @map("product_image_url")
+
+  // Quantity & harga
+  quantity Int
+  price    Decimal @db.Decimal(15, 2)
+
+  // Raw payload untuk audit
+  rawItemPayload Json? @map("raw_item_payload")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@index([orderId])
+  @@map("order_items")
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SHIPMENTS
+// Record proses pengiriman yang sudah dieksekusi via API
+// Hanya Shopee yang aktif di Phase ini
+// ─────────────────────────────────────────────────────────────────────────────
+
+model Shipment {
+  id      Int              @id @default(autoincrement())
+  orderId Int              @map("order_id")
+  order   MarketplaceOrder @relation(fields: [orderId], references: [id])
+
+  // Siapa yang memproses
+  processedById Int?  @map("processed_by_id")
+  processedBy   User? @relation(fields: [processedById], references: [id])
+
+  // Nomor order & package (denormalized untuk kemudahan log)
+  platformOrderId   String  @map("platform_order_id")
+  platformPackageId String? @map("platform_package_id")
+
+  // Metode pengiriman (dari get_shipping_parameter Shopee)
+  shippingMethod     String? @map("shipping_method")      // PICKUP / DROPOFF
+  logisticsChannelId String? @map("logistics_channel_id")
+
+  // Tracking number resmi — hanya dari API Shopee
+  trackingNumber String? @map("tracking_number")
+
+  // Pickup info (Shopee)
+  pickupAddressId  String? @map("pickup_address_id")  // dari Shopee API
+  pickupTimeId     String? @map("pickup_time_id")     // dari Shopee API
+  pickupDate       String? @map("pickup_date")
+  pickupTimeText   String? @map("pickup_time_text")   // slot teks yang ditampilkan ke user
+
+  // Raw response API untuk audit
+  shopeeResponse Json? @map("shopee_response")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@index([orderId])
+  @@index([platformOrderId])
+  @@map("shipments")
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SHIPPING DOCUMENTS
+// Record dokumen pengiriman / label dari Shopee
+// PDF label WAJIB berasal dari Shopee — tidak boleh custom
+// ─────────────────────────────────────────────────────────────────────────────
+
+model ShippingDocument {
+  id      Int              @id @default(autoincrement())
+  orderId Int              @map("order_id")
+  order   MarketplaceOrder @relation(fields: [orderId], references: [id])
+
+  // Nomor order (denormalized)
+  platformOrderId   String  @map("platform_order_id")
+  platformPackageId String? @map("platform_package_id")
+
+  // Status dokumen
+  documentStatus ShippingDocStatus @default(NOT_CREATED) @map("document_status")
+
+  // Lokasi file PDF jika disimpan di server
+  // Opsional — bisa juga langsung stream ke client
+  filePath String? @map("file_path")
+
+  // Raw response Shopee (create + result + download)
+  shopeeResponse Json? @map("shopee_response")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@index([orderId])
+  @@map("shipping_documents")
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// PRINT LOGS
+// Audit trail setiap kali label dicetak atau dicoba cetak
+// ─────────────────────────────────────────────────────────────────────────────
+
+model PrintLog {
+  id      Int              @id @default(autoincrement())
+  orderId Int              @map("order_id")
+  order   MarketplaceOrder @relation(fields: [orderId], references: [id])
+
+  // Siapa yang mencetak
+  printedById Int?  @map("printed_by_id")
+  printedBy   User? @relation(fields: [printedById], references: [id])
+
+  // Nomor order (denormalized)
+  platformOrderId String @map("platform_order_id")
+
+  // Waktu cetak
+  printedAt DateTime @default(now()) @map("printed_at")
+
+  // Jenis cetak
+  printType PrintType @map("print_type")
+
+  // Lokasi file jika ada
+  filePath String? @map("file_path")
+
+  @@index([orderId])
+  @@index([printedAt])
+  @@map("print_logs")
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// API LOGS
+// Semua request ke Shopee API dan TikTok API dicatat di sini
+// JANGAN simpan secret key / token di field ini
+// ─────────────────────────────────────────────────────────────────────────────
+
+model ApiLog {
+  id Int @id @default(autoincrement())
+
+  platform Platform
+  endpoint String    // nama endpoint, contoh: get_order_list, ship_order
+  method   String    @default("POST") // HTTP method
+
+  // Request & response (sanitized — pastikan secret tidak masuk)
+  requestPayload  Json? @map("request_payload")
+  responsePayload Json? @map("response_payload")
+
+  // Hasil
+  status       ApiLogStatus
+  httpStatus   Int?    @map("http_status")   // HTTP status code dari marketplace
+  errorCode    String? @map("error_code")    // error code dari Shopee/TikTok
+  errorMessage String? @map("error_message") @db.Text
+
+  // Context (order mana yang terkait, jika ada)
+  platformOrderId String? @map("platform_order_id")
+  shopId          Int?    @map("shop_id")
+
+  // Durasi request dalam ms
+  durationMs Int? @map("duration_ms")
+
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@index([platform, endpoint])
+  @@index([status])
+  @@index([createdAt])
+  @@map("api_logs")
+}
