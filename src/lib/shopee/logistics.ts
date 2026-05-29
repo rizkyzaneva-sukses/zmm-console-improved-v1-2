@@ -142,8 +142,21 @@ export async function getShippingParameter(shopDbId: number, orderSn: string, pa
 
   const query: Record<string, unknown> = { order_sn: orderSn };
   if (packageNumber) query.package_number = packageNumber;
-
-  return shopeeGet(PATHS.GET_SHIPPING_PARAM, shopId, accessToken, query);
+  try {
+    return await shopeeGet(PATHS.GET_SHIPPING_PARAM, shopId, accessToken, query);
+  } catch (err) {
+    // Sebagian paket Shopee bisa tidak eligible saat diminta via package_number tertentu.
+    // Fallback ke level order agar opsi shipping tetap bisa dibaca.
+    if (
+      packageNumber &&
+      err instanceof ShopeeApiError &&
+      (err.shopeeMessage.toLowerCase().includes("not eligible for rescheduling") ||
+        err.errorCode.toLowerCase().includes("batch_api_all_failed"))
+    ) {
+      return shopeeGet(PATHS.GET_SHIPPING_PARAM, shopId, accessToken, { order_sn: orderSn });
+    }
+    throw err;
+  }
 }
 
 export interface ShipOrderPayload {

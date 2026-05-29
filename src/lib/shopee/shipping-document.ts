@@ -1,5 +1,5 @@
 import { db } from "@/lib/db";
-import { shopeePost, shopeeBinaryPost, getShopCredentials } from "./client";
+import { shopeePost, shopeeBinaryPost, getShopCredentials, ShopeeApiError } from "./client";
 import { Prisma } from "@prisma/client";
 
 // ─────────────────────────────────────────────────────────────
@@ -33,14 +33,50 @@ function toShopeeOrderList(packages: ShopeeDocumentPackage[]) {
   }));
 }
 
+function extractResultListFailures(raw: unknown): string[] {
+  const record = raw as
+    | {
+        response?: {
+          result_list?: Array<{
+            order_sn?: string;
+            package_number?: string;
+            fail_error?: string;
+            fail_message?: string;
+            message?: string;
+          }>;
+        };
+      }
+    | undefined;
+
+  const results = record?.response?.result_list ?? [];
+  return results
+    .map((item) => {
+      const order = item.order_sn ?? "-";
+      const pkg = item.package_number ? `/${item.package_number}` : "";
+      const msg = item.fail_error ?? item.fail_message ?? item.message;
+      return msg ? `${order}${pkg}: ${msg}` : "";
+    })
+    .filter(Boolean);
+}
+
 export async function createShippingDocument(shopDbId: number, packagesInput: string[] | ShopeeDocumentPackage[]) {
   const packages = normalizePackages(packagesInput);
   const { accessToken, platformShopId } = await getShopCredentials(shopDbId);
   const shopId = Number(platformShopId);
 
-  const result = await shopeePost(PATHS.CREATE_DOC, shopId, accessToken, {
-    order_list: toShopeeOrderList(packages),
-  });
+  let result: unknown;
+  try {
+    result = await shopeePost(PATHS.CREATE_DOC, shopId, accessToken, {
+      order_list: toShopeeOrderList(packages),
+    });
+  } catch (err) {
+    if (err instanceof ShopeeApiError && err.errorCode === "common.batch_api_all_failed") {
+      const details = extractResultListFailures(err.raw);
+      const detailText = details.length ? ` Detail: ${details.join(" | ")}` : "";
+      throw new Error(`Semua label gagal diproses Shopee.${detailText}`);
+    }
+    throw err;
+  }
 
   for (const pkg of packages) {
     const order = await db.marketplaceOrder.findFirst({ where: { platformOrderId: pkg.orderSn, platform: "SHOPEE" } });
@@ -84,7 +120,12 @@ export async function pollShippingDocumentResult(
     const allReady = statuses.length > 0 && statuses.every((s) => ["READY", "SUCCESS", "DONE"].includes(s));
     const anyFailed = statuses.some((s) => ["FAILED", "FAIL", "ERROR"].includes(s));
 
-    if (anyFailed) return "FAILED";
+    if (anyFailed) {
+      const failed = results
+        .filter((r) => ["FAILED", "FAIL", "ERROR"].includes(String(r.status ?? "").toUpperCase()))
+        .map((r) => `${r.order_sn}: ${r.fail_error ?? "unknown error"}`);
+      throw new Error(`Label Shopee gagal diproses: ${failed.join(" | ")}`);
+    }
     if (allReady) return "READY";
 
     if (attempt < MAX_POLL_ATTEMPTS - 1) {
@@ -107,7 +148,6 @@ export async function downloadShippingDocument(
   await createShippingDocument(shopDbId, packages);
 
   const docStatus = await pollShippingDocumentResult(shopDbId, packages);
-  if (docStatus === "FAILED") throw new Error("Label gagal dibuat dari Shopee. Coba beberapa saat lagi.");
   if (docStatus === "PROCESSING") throw new Error("Label masih dibuat oleh Shopee. Coba lagi dalam beberapa menit.");
 
   const pdfBuffer = await shopeeBinaryPost(PATHS.DOWNLOAD_DOC, shopId, accessToken, {
