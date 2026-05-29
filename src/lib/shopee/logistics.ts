@@ -1,5 +1,5 @@
 import { db } from "@/lib/db";
-import { shopeeGet, shopeePost, getShopCredentials } from "./client";
+import { ShopeeApiError, shopeeGet, shopeePost, getShopCredentials } from "./client";
 import { Prisma } from "@prisma/client";
 
 // ─────────────────────────────────────────────────────────────
@@ -176,7 +176,24 @@ export async function shipOrder(shopDbId: number, payload: ShipOrderPayload) {
   if (payload.method === "DROPOFF") body.dropoff = {};
   if (payload.method === "NON_INTEGRATED") body.non_integrated = {};
 
-  const result = await shopeePost(PATHS.SHIP_ORDER, shopId, accessToken, body);
+  let result: unknown;
+  try {
+    result = await shopeePost(PATHS.SHIP_ORDER, shopId, accessToken, body);
+  } catch (err) {
+    // Beberapa paket SPX tidak eligible untuk reschedule pickup.
+    // Fallback: proses ship_order tanpa payload pickup agar tetap lanjut.
+    if (
+      payload.method === "PICKUP" &&
+      err instanceof ShopeeApiError &&
+      err.shopeeMessage.toLowerCase().includes("not eligible for rescheduling")
+    ) {
+      const fallbackBody: Record<string, unknown> = { order_sn: payload.orderSn };
+      if (payload.packageNumber) fallbackBody.package_number = payload.packageNumber;
+      result = await shopeePost(PATHS.SHIP_ORDER, shopId, accessToken, fallbackBody);
+    } else {
+      throw err;
+    }
+  }
 
   const order = await db.marketplaceOrder.findFirst({
     where: { platformOrderId: payload.orderSn, platform: "SHOPEE" },
