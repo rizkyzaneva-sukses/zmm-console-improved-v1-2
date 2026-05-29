@@ -1,10 +1,11 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { useSearchParams } from "next/navigation";
 import { useSession } from "next-auth/react";
 import { UserRole } from "@prisma/client";
 import { hasPermission } from "@/lib/rbac";
-import { RefreshCw, Plus, Store, AlertTriangle, CheckCircle2 } from "lucide-react";
+import { RefreshCw, Link2, Store, AlertTriangle, CheckCircle2 } from "lucide-react";
 
 type Platform = "SHOPEE" | "TIKTOK";
 
@@ -25,21 +26,17 @@ const btnSecondary: React.CSSProperties = { padding: "8px 14px", borderRadius: 8
 
 export default function ShopsPage() {
   const { data: session } = useSession();
+  const searchParams = useSearchParams();
   const role = (session?.user?.role ?? "PACKING_TEAM") as UserRole;
   const canManage = hasPermission(role, "canManageShops");
 
   const [shops, setShops] = useState<ShopRow[]>([]);
   const [loading, setLoading] = useState(false);
-  const [saving, setSaving] = useState(false);
+  const [connecting, setConnecting] = useState(false);
   const [toast, setToast] = useState<{ msg: string; type: "success" | "error" | "warning" } | null>(null);
   const [form, setForm] = useState({
     platform: "SHOPEE" as Platform,
     shopName: "",
-    platformShopId: "",
-    shopCipher: "",
-    accessToken: "",
-    refreshToken: "",
-    tokenExpiredAt: "",
   });
 
   const showToast = (msg: string, type: "success" | "error" | "warning" = "success") => {
@@ -59,39 +56,41 @@ export default function ShopsPage() {
     }
   };
 
-  useEffect(() => { fetchShops(); }, []);
+  useEffect(() => {
+    fetchShops();
+  }, []);
 
-  const saveShop = async () => {
-    if (!form.shopName || !form.platformShopId) {
-      showToast("Nama toko dan Shop ID wajib diisi.", "warning");
+  useEffect(() => {
+    const oauth = searchParams.get("oauth");
+    const msg = searchParams.get("msg");
+    if (!oauth || !msg) return;
+    showToast(msg, oauth === "success" ? "success" : "error");
+  }, [searchParams]);
+
+  const connectShop = async () => {
+    if (!form.shopName.trim()) {
+      showToast("Nama toko wajib diisi sebelum connect.", "warning");
       return;
     }
 
-    setSaving(true);
+    setConnecting(true);
     try {
-      const res = await fetch("/api/shops", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          platform: form.platform,
-          shopName: form.shopName,
-          platformShopId: form.platformShopId,
-          shopCipher: form.platform === "TIKTOK" ? form.shopCipher : undefined,
-          accessToken: form.accessToken || undefined,
-          refreshToken: form.refreshToken || undefined,
-          tokenExpiredAt: form.tokenExpiredAt || undefined,
-        }),
+      const params = new URLSearchParams({
+        platform: form.platform,
+        shopName: form.shopName.trim(),
       });
+
+      const res = await fetch(`/api/shops/connect/start?${params.toString()}`);
       const data = await res.json();
-      if (!data.success) {
-        showToast(data.error ?? "Gagal menyimpan toko.", "error");
+
+      if (!data.success || !data?.data?.redirectUrl) {
+        showToast(data.error ?? "Gagal membuat URL connect.", "error");
         return;
       }
-      showToast("Toko berhasil disimpan.");
-      setForm({ platform: "SHOPEE", shopName: "", platformShopId: "", shopCipher: "", accessToken: "", refreshToken: "", tokenExpiredAt: "" });
-      fetchShops();
+
+      window.location.href = data.data.redirectUrl as string;
     } finally {
-      setSaving(false);
+      setConnecting(false);
     }
   };
 
@@ -111,35 +110,29 @@ export default function ShopsPage() {
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 18 }}>
         <div>
           <h1 style={{ margin: 0, fontSize: 22, fontWeight: 800, color: "#111827" }}>Kelola Toko Marketplace</h1>
-          <p style={{ margin: "4px 0 0", fontSize: 13, color: "#6B7280" }}>Simpan koneksi toko Shopee dan TikTok. Token akan dienkripsi sebelum masuk database.</p>
+          <p style={{ margin: "4px 0 0", fontSize: 13, color: "#6B7280" }}>Connect via login resmi marketplace. Shop ID dan token akan tersimpan otomatis dari OAuth callback.</p>
         </div>
         <button onClick={fetchShops} style={btnSecondary}><RefreshCw size={14} className={loading ? "animate-spin" : ""} /> Refresh</button>
       </div>
 
       <div style={{ display: "grid", gridTemplateColumns: "360px 1fr", gap: 16 }}>
         <div style={{ background: "#fff", border: "1px solid #E5E7EB", borderRadius: 14, padding: 18 }}>
-          <h2 style={{ margin: "0 0 14px", fontSize: 15, fontWeight: 800, color: "#111827" }}>Tambah / Update Toko</h2>
+          <h2 style={{ margin: "0 0 14px", fontSize: 15, fontWeight: 800, color: "#111827" }}>Connect Toko</h2>
           <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
             <select value={form.platform} onChange={(e) => setForm({ ...form, platform: e.target.value as Platform })} style={inputStyle}>
               <option value="SHOPEE">Shopee</option>
               <option value="TIKTOK">TikTok Shop</option>
             </select>
             <input placeholder="Nama toko" value={form.shopName} onChange={(e) => setForm({ ...form, shopName: e.target.value })} style={inputStyle} />
-            <input placeholder={form.platform === "SHOPEE" ? "Shopee Shop ID" : "TikTok Shop ID"} value={form.platformShopId} onChange={(e) => setForm({ ...form, platformShopId: e.target.value })} style={inputStyle} />
-            {form.platform === "TIKTOK" && (
-              <input placeholder="TikTok Shop Cipher" value={form.shopCipher} onChange={(e) => setForm({ ...form, shopCipher: e.target.value })} style={inputStyle} />
-            )}
-            <textarea placeholder="Access Token resmi marketplace" value={form.accessToken} onChange={(e) => setForm({ ...form, accessToken: e.target.value })} style={{ ...inputStyle, minHeight: 74, resize: "vertical" }} />
-            <textarea placeholder="Refresh Token resmi marketplace" value={form.refreshToken} onChange={(e) => setForm({ ...form, refreshToken: e.target.value })} style={{ ...inputStyle, minHeight: 74, resize: "vertical" }} />
-            <label style={{ fontSize: 11, color: "#6B7280" }}>Token expired at, opsional</label>
-            <input type="datetime-local" value={form.tokenExpiredAt} onChange={(e) => setForm({ ...form, tokenExpiredAt: e.target.value })} style={inputStyle} />
-            <button onClick={saveShop} disabled={saving} style={{ ...btnPrimary, justifyContent: "center", background: saving ? "#D1D5DB" : "#EE4D2D" }}>
-              <Plus size={14} /> {saving ? "Menyimpan..." : "Simpan Toko"}
+
+            <button onClick={connectShop} disabled={connecting} style={{ ...btnPrimary, justifyContent: "center", background: connecting ? "#D1D5DB" : "#EE4D2D" }}>
+              <Link2 size={14} />
+              {connecting ? "Membuka halaman login..." : `Connect ${form.platform === "SHOPEE" ? "Shopee" : "TikTok"}`}
             </button>
           </div>
           <div style={{ marginTop: 14, padding: 12, background: "#EFF6FF", border: "1px solid #BFDBFE", borderRadius: 10 }}>
             <p style={{ margin: 0, fontSize: 12, color: "#1E40AF", lineHeight: 1.5 }}>
-              Catatan: halaman ini memakai input token manual. Untuk production penuh, tambahkan OAuth connect flow resmi Shopee/TikTok.
+              Callback URL otomatis dari env Easypanel (`APP_URL`/`NEXTAUTH_URL`/`NEXT_PUBLIC_APP_URL`). Tidak perlu isi token manual lagi.
             </p>
           </div>
         </div>
