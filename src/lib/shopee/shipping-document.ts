@@ -26,7 +26,7 @@ function normalizePackages(packages: string[] | ShopeeDocumentPackage[]): Shopee
   return packages.map((item) => typeof item === "string" ? { orderSn: item } : item);
 }
 
-function toShopeePackageList(packages: ShopeeDocumentPackage[]) {
+function toShopeeOrderList(packages: ShopeeDocumentPackage[]) {
   return packages.map((pkg) => ({
     order_sn: pkg.orderSn,
     ...(pkg.packageNumber ? { package_number: pkg.packageNumber } : {}),
@@ -39,7 +39,7 @@ export async function createShippingDocument(shopDbId: number, packagesInput: st
   const shopId = Number(platformShopId);
 
   const result = await shopeePost(PATHS.CREATE_DOC, shopId, accessToken, {
-    package_list: toShopeePackageList(packages),
+    order_list: toShopeeOrderList(packages),
   });
 
   for (const pkg of packages) {
@@ -76,7 +76,7 @@ export async function pollShippingDocumentResult(
     const res = await shopeePost<{
       response?: { result_list?: { order_sn: string; status: string; fail_error?: string }[] };
     }>(PATHS.GET_RESULT, shopId, accessToken, {
-      package_list: toShopeePackageList(packages),
+      order_list: toShopeeOrderList(packages),
     });
 
     const results = res.response?.result_list ?? [];
@@ -111,7 +111,7 @@ export async function downloadShippingDocument(
   if (docStatus === "PROCESSING") throw new Error("Label masih dibuat oleh Shopee. Coba lagi dalam beberapa menit.");
 
   const pdfBuffer = await shopeeBinaryPost(PATHS.DOWNLOAD_DOC, shopId, accessToken, {
-    package_list: toShopeePackageList(packages),
+    order_list: toShopeeOrderList(packages),
   });
 
   for (const pkg of packages) {
