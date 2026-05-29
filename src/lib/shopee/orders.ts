@@ -1,5 +1,5 @@
 import { db } from "@/lib/db";
-import { shopeeGet, getShopCredentials } from "./client";
+import { ShopeeApiError, shopeeGet, getShopCredentials } from "./client";
 import { mapShopeeStatusToInternal } from "./status-mapper";
 import { Platform, Prisma } from "@prisma/client";
 
@@ -16,10 +16,8 @@ const SYNC_STATUS_LIST = [
   "UNPAID",
   "READY_TO_SHIP",
   "PROCESSED",
-  "RETRY_SHIP",
   "SHIPPED",
   "TO_RETURN",
-  "RETURNED",
   "COMPLETED",
   "IN_CANCEL",
   "CANCELLED",
@@ -67,20 +65,34 @@ export async function syncOrdersFromShopee(
     let hasMore = true;
 
     while (hasMore) {
-      const res = await shopeeGet<ShopeeOrderListResponse>(
-        ORDER_LIST_PATH,
-        shopId,
-        accessToken,
-        {
-          time_range_field: "create_time",
-          time_from: timeFrom,
-          time_to: timeTo,
-          page_size: 50,
-          order_status: status,
-          cursor,
-          response_optional_fields: "order_status",
+      let res: ShopeeOrderListResponse;
+      try {
+        res = await shopeeGet<ShopeeOrderListResponse>(
+          ORDER_LIST_PATH,
+          shopId,
+          accessToken,
+          {
+            time_range_field: "create_time",
+            time_from: timeFrom,
+            time_to: timeTo,
+            page_size: 50,
+            order_status: status,
+            cursor,
+            response_optional_fields: "order_status",
+          }
+        );
+      } catch (err) {
+        if (
+          err instanceof ShopeeApiError &&
+          err.shopeeMessage.toLowerCase().includes("order_status is invalid")
+        ) {
+          // Beberapa akun/API version menolak nilai order_status tertentu.
+          // Jangan gagalkan sync total, cukup skip status yang tidak didukung.
+          result.errors.push(`Status Shopee tidak didukung dan diskip: ${status}`);
+          break;
         }
-      );
+        throw err;
+      }
 
       const orderList = res.response?.order_list ?? [];
       allOrderSns.push(...orderList.map((o) => o.order_sn));
