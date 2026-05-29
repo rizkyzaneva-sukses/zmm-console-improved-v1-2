@@ -33,34 +33,36 @@ function toShopeeOrderList(packages: ShopeeDocumentPackage[]) {
   }));
 }
 
+function extractResultList(raw: unknown): Array<{
+  order_sn?: string;
+  package_number?: string;
+  fail_error?: string;
+  fail_message?: string;
+  message?: string;
+}> {
+  // Shopee may place result_list at the root level OR under response.
+  const record = raw as Record<string, unknown> | null | undefined;
+  if (!record) return [];
+  const rootList = record.result_list;
+  if (Array.isArray(rootList)) return rootList as ReturnType<typeof extractResultList>;
+  const responseList = (record.response as Record<string, unknown> | undefined)?.result_list;
+  if (Array.isArray(responseList)) return responseList as ReturnType<typeof extractResultList>;
+  return [];
+}
+
 function shouldRetryWithoutPackage(err: unknown): boolean {
   const msg = err instanceof Error ? err.message.toLowerCase() : "";
   if (msg.includes("logistics.package_can_not_print")) return true;
   // ShopeeApiError asli dengan error code batch_api_all_failed yang detail-nya mengandung package_can_not_print
   if (err instanceof ShopeeApiError) {
-    const raw = err.raw as { response?: { result_list?: Array<{ fail_error?: string }> } } | undefined;
-    const results = raw?.response?.result_list ?? [];
-    return results.some((r) => String(r.fail_error ?? "").includes("package_can_not_print"));
+    const results = extractResultList(err.raw);
+    return results.length > 0 && results.every((r) => String(r.fail_error ?? "").includes("package_can_not_print"));
   }
   return false;
 }
 
 function extractResultListFailures(raw: unknown): string[] {
-  const record = raw as
-    | {
-        response?: {
-          result_list?: Array<{
-            order_sn?: string;
-            package_number?: string;
-            fail_error?: string;
-            fail_message?: string;
-            message?: string;
-          }>;
-        };
-      }
-    | undefined;
-
-  const results = record?.response?.result_list ?? [];
+  const results = extractResultList(raw);
   return results
     .map((item) => {
       const order = item.order_sn ?? "-";
