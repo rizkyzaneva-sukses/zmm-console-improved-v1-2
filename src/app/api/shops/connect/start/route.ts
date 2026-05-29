@@ -19,7 +19,10 @@ function buildShopeeAuthUrl(req: NextRequest, shopName: string) {
   const timestamp = Math.floor(Date.now() / 1000);
   const sign = crypto.createHmac("sha256", partnerKey).update(`${partnerId}${path}${timestamp}`).digest("hex");
 
-  const redirect = `${getAppUrl(req)}/api/shops/connect/callback`;
+  const redirectUrl = new URL(`${getAppUrl(req)}/api/shops/connect/callback`);
+  redirectUrl.searchParams.set("platform", "SHOPEE");
+  redirectUrl.searchParams.set("shopName", shopName);
+  const redirect = redirectUrl.toString();
   const state = buildOAuthState({ platform: "SHOPEE", shopName });
 
   const url = new URL(`${shopeeBaseUrl}${path}`);
@@ -40,7 +43,10 @@ function buildTikTokAuthUrl(req: NextRequest, shopName: string) {
     throw new Error("TIKTOK_APP_KEY dan TIKTOK_AUTH_URL wajib diisi di env Easypanel.");
   }
 
-  const redirect = `${getAppUrl(req)}/api/shops/connect/callback`;
+  const redirectUrl = new URL(`${getAppUrl(req)}/api/shops/connect/callback`);
+  redirectUrl.searchParams.set("platform", "TIKTOK");
+  redirectUrl.searchParams.set("shopName", shopName);
+  const redirect = redirectUrl.toString();
   const state = buildOAuthState({ platform: "TIKTOK", shopName });
 
   const url = new URL(authUrl);

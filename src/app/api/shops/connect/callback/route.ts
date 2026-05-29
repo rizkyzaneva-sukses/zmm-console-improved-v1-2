@@ -14,7 +14,7 @@ function redirectToShops(req: NextRequest, ok: boolean, message: string) {
   return NextResponse.redirect(url);
 }
 
-async function handleShopeeCallback(req: NextRequest, shopName: string) {
+async function handleShopeeCallback(req: NextRequest, shopName?: string) {
   const code = req.nextUrl.searchParams.get("code");
   const shopId = req.nextUrl.searchParams.get("shop_id");
 
@@ -63,6 +63,8 @@ async function handleShopeeCallback(req: NextRequest, shopName: string) {
     throw new Error(`Gagal ambil token Shopee: ${data.message ?? data.error ?? "unknown error"}`);
   }
 
+  const normalizedShopName = (shopName ?? "").trim() || `Shopee ${shopId}`;
+
   await db.shop.upsert({
     where: {
       platform_platformShopId: {
@@ -72,7 +74,7 @@ async function handleShopeeCallback(req: NextRequest, shopName: string) {
     },
     create: {
       platform: "SHOPEE",
-      shopName,
+      shopName: normalizedShopName,
       platformShopId: shopId,
       authStatus: "CONNECTED",
       accessTokenEncrypted: encrypt(data.access_token),
@@ -80,7 +82,7 @@ async function handleShopeeCallback(req: NextRequest, shopName: string) {
       tokenExpiredAt: data.expire_in ? new Date(Date.now() + data.expire_in * 1000) : null,
     },
     update: {
-      shopName,
+      shopName: normalizedShopName,
       authStatus: "CONNECTED",
       accessTokenEncrypted: encrypt(data.access_token),
       refreshTokenEncrypted: encrypt(data.refresh_token),
@@ -89,7 +91,7 @@ async function handleShopeeCallback(req: NextRequest, shopName: string) {
   });
 }
 
-async function handleTikTokCallback(req: NextRequest, shopName: string) {
+async function handleTikTokCallback(req: NextRequest, shopName?: string) {
   const code = req.nextUrl.searchParams.get("code");
   if (!code) {
     throw new Error("Callback TikTok tidak lengkap (code tidak ada). Silakan connect ulang.");
@@ -126,6 +128,8 @@ async function handleTikTokCallback(req: NextRequest, shopName: string) {
     throw new Error("Gagal ambil token TikTok dari callback. Pastikan URL/auth config TikTok di env sudah benar.");
   }
 
+  const normalizedShopName = (shopName ?? "").trim() || `TikTok ${shopId}`;
+
   await db.shop.upsert({
     where: {
       platform_platformShopId: {
@@ -135,7 +139,7 @@ async function handleTikTokCallback(req: NextRequest, shopName: string) {
     },
     create: {
       platform: "TIKTOK",
-      shopName,
+      shopName: normalizedShopName,
       platformShopId: shopId,
       shopCipher: shopCipher || null,
       authStatus: "CONNECTED",
@@ -144,7 +148,7 @@ async function handleTikTokCallback(req: NextRequest, shopName: string) {
       tokenExpiredAt: expiresIn ? new Date(Date.now() + expiresIn * 1000) : null,
     },
     update: {
-      shopName,
+      shopName: normalizedShopName,
       shopCipher: shopCipher || null,
       authStatus: "CONNECTED",
       accessTokenEncrypted: encrypt(accessToken),
@@ -157,19 +161,31 @@ async function handleTikTokCallback(req: NextRequest, shopName: string) {
 export async function GET(req: NextRequest) {
   try {
     const stateRaw = req.nextUrl.searchParams.get("state");
-    if (!stateRaw) {
-      return redirectToShops(req, false, "State OAuth tidak ada.");
+    const fallbackPlatform = (req.nextUrl.searchParams.get("platform") ?? "").toUpperCase();
+    const fallbackShopName = req.nextUrl.searchParams.get("shopName") ?? "";
+
+    if (stateRaw) {
+      const state = parseOAuthState(stateRaw);
+      if (state.platform === "SHOPEE") {
+        await handleShopeeCallback(req, state.shopName);
+        return redirectToShops(req, true, "Shopee berhasil terkoneksi.");
+      }
+
+      await handleTikTokCallback(req, state.shopName);
+      return redirectToShops(req, true, "TikTok berhasil terkoneksi.");
     }
 
-    const state = parseOAuthState(stateRaw);
-
-    if (state.platform === "SHOPEE") {
-      await handleShopeeCallback(req, state.shopName);
+    // Fallback for providers that do not return state consistently.
+    if (fallbackPlatform === "SHOPEE") {
+      await handleShopeeCallback(req, fallbackShopName);
       return redirectToShops(req, true, "Shopee berhasil terkoneksi.");
     }
+    if (fallbackPlatform === "TIKTOK") {
+      await handleTikTokCallback(req, fallbackShopName);
+      return redirectToShops(req, true, "TikTok berhasil terkoneksi.");
+    }
 
-    await handleTikTokCallback(req, state.shopName);
-    return redirectToShops(req, true, "TikTok berhasil terkoneksi.");
+    return redirectToShops(req, false, "State OAuth tidak ada dan platform callback tidak dikenali.");
   } catch (err) {
     const message = err instanceof Error ? err.message : "Gagal memproses callback OAuth.";
     return redirectToShops(req, false, message);
