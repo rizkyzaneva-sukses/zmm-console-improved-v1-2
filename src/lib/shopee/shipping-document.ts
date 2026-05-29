@@ -33,6 +33,11 @@ function toShopeeOrderList(packages: ShopeeDocumentPackage[]) {
   }));
 }
 
+function shouldRetryWithoutPackage(err: unknown): boolean {
+  const msg = err instanceof Error ? err.message.toLowerCase() : "";
+  return msg.includes("logistics.package_can_not_print");
+}
+
 function extractResultListFailures(raw: unknown): string[] {
   const record = raw as
     | {
@@ -142,16 +147,30 @@ export async function downloadShippingDocument(
   printedByUserId?: number
 ): Promise<Buffer> {
   const packages = normalizePackages(packagesInput);
+  const packagesWithoutNumber = packages.map((pkg) => ({ orderSn: pkg.orderSn }));
   const { accessToken, platformShopId } = await getShopCredentials(shopDbId);
   const shopId = Number(platformShopId);
 
-  await createShippingDocument(shopDbId, packages);
-
-  const docStatus = await pollShippingDocumentResult(shopDbId, packages);
-  if (docStatus === "PROCESSING") throw new Error("Label masih dibuat oleh Shopee. Coba lagi dalam beberapa menit.");
+  let activePackages = packages;
+  try {
+    await createShippingDocument(shopDbId, activePackages);
+    const docStatus = await pollShippingDocumentResult(shopDbId, activePackages);
+    if (docStatus === "PROCESSING") throw new Error("Label masih dibuat oleh Shopee. Coba lagi dalam beberapa menit.");
+  } catch (err) {
+    // Beberapa order SPX tidak bisa dicetak ketika package_number dikirim.
+    // Fallback: retry pakai order_sn saja.
+    if (shouldRetryWithoutPackage(err) && packages.some((pkg) => pkg.packageNumber)) {
+      activePackages = packagesWithoutNumber;
+      await createShippingDocument(shopDbId, activePackages);
+      const docStatus = await pollShippingDocumentResult(shopDbId, activePackages);
+      if (docStatus === "PROCESSING") throw new Error("Label masih dibuat oleh Shopee. Coba lagi dalam beberapa menit.");
+    } else {
+      throw err;
+    }
+  }
 
   const pdfBuffer = await shopeeBinaryPost(PATHS.DOWNLOAD_DOC, shopId, accessToken, {
-    order_list: toShopeeOrderList(packages),
+    order_list: toShopeeOrderList(activePackages),
   });
 
   for (const pkg of packages) {
