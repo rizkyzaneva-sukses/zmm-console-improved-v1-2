@@ -35,7 +35,14 @@ function toShopeeOrderList(packages: ShopeeDocumentPackage[]) {
 
 function shouldRetryWithoutPackage(err: unknown): boolean {
   const msg = err instanceof Error ? err.message.toLowerCase() : "";
-  return msg.includes("logistics.package_can_not_print");
+  if (msg.includes("logistics.package_can_not_print")) return true;
+  // ShopeeApiError asli dengan error code batch_api_all_failed yang detail-nya mengandung package_can_not_print
+  if (err instanceof ShopeeApiError) {
+    const raw = err.raw as { response?: { result_list?: Array<{ fail_error?: string }> } } | undefined;
+    const results = raw?.response?.result_list ?? [];
+    return results.some((r) => String(r.fail_error ?? "").includes("package_can_not_print"));
+  }
+  return false;
 }
 
 function extractResultListFailures(raw: unknown): string[] {
@@ -76,9 +83,16 @@ export async function createShippingDocument(shopDbId: number, packagesInput: st
     });
   } catch (err) {
     if (err instanceof ShopeeApiError && err.errorCode === "common.batch_api_all_failed") {
+      // Cek apakah semua gagal karena package_can_not_print — biarkan ShopeeApiError asli
+      // ter-throw agar downloadShippingDocument bisa melakukan retry tanpa package_number.
       const details = extractResultListFailures(err.raw);
-      const detailText = details.length ? ` Detail: ${details.join(" | ")}` : "";
-      throw new Error(`Semua label gagal diproses Shopee.${detailText}`);
+      const allPackageCanNotPrint = details.length > 0 && details.every((d) => d.includes("package_can_not_print"));
+      if (!allPackageCanNotPrint) {
+        const detailText = details.length ? ` Detail: ${details.join(" | ")}` : "";
+        throw new Error(`Semua label gagal diproses Shopee.${detailText}`);
+      }
+      // Lempar ShopeeApiError asli agar fallback retry bisa berjalan
+      throw err;
     }
     throw err;
   }
